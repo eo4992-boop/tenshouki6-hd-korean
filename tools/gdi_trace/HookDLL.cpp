@@ -141,7 +141,7 @@ FARPROC WINAPI HookGetProcAddress(HMODULE m,LPCSTR name){
            std::strcmp(name,"GetDIBits")==0 || std::strcmp(name,"BitBlt")==0 ||
            std::strcmp(name,"StretchBlt")==0 || std::strcmp(name,"PatBlt")==0 ||
            std::strcmp(name,"AlphaBlend")==0)
-            Log(L"[GetProcAddress] requested="+std::wstring(std::begin(name),std::end(name)));
+            Log(L"[GetProcAddress] requested="+std::wstring(AnsiToJapanese(name,-1)));
     }
     return result;
 }
