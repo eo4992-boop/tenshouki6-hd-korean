@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <iostream>
+#include <string>
 
 DWORD FindProcess(const wchar_t* exe){
     HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
