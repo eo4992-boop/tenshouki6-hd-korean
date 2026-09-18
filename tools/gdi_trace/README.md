@@ -50,3 +50,12 @@ msbuild NOBU6HD_GDI_Trace.sln /p:Configuration=Release /p:Platform=Win32
 ```
 
 를 실행할 수 있습니다.
+
+
+## GetProcAddress full trace
+
+The current V2 tracer logs every GetProcAddress call, including the requesting module, requested export name (or ordinal), and returned address. Example:
+
+`[GetProcAddress] module=NOBU6HD_JP.exe requested="SomeAPI" result=0x12345678`
+
+This is intentionally not filtered to a predefined list of APIs, so the full GetProcAddress call set can be inspected.
