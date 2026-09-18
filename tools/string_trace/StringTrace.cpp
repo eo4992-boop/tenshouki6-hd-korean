@@ -19,10 +19,10 @@ static std::string Utf8(const std::wstring& s) {
     return out;
 }
 
-/* Build the default target 碩田信長 from CP932 bytes so the source file itself contains
+/* Build the default target 織田信長 from CP932 bytes so the source file itself contains
    ASCII only. This avoids Visual C++ source-code-page conversion issues. */
 static std::wstring DefaultTarget() {
-    const BYTE cp932[] = { 0x90,0xD7,0x93,0x63,0x90,0x4D,0x92,0xB7 };
+    const BYTE cp932[] = { 0x90,0x44,0x93,0x63,0x90,0x4D,0x92,0xB7 };
     int n=MultiByteToWideChar(932,0,reinterpret_cast<LPCSTR>(cp932),sizeof(cp932),nullptr,0);
     if(n<=0)return {};
     std::wstring out(n,L'\0');
