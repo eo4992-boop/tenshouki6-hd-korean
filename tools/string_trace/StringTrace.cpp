@@ -83,7 +83,7 @@ static bool SetBP(HANDLE t,const std::vector<UINT_PTR>& a){
         UINT_PTR x=a[i]&~(UINT_PTR)3;
         switch(i){case 0:c.Dr0=x;break;case 1:c.Dr1=x;break;case 2:c.Dr2=x;break;case 3:c.Dr3=x;break;}
         c.Dr7|=1u<<(i*2);
-        c.Dr7|=3u<<(16+i*4);
+        c.Dr7|=3u<<(16+i*4); c.Dr7|=3u<<(18+i*4);
     }
     return SetThreadContext(t,&c)!=FALSE;
 }
@@ -175,9 +175,9 @@ int wmain(int argc,wchar_t* argv[]){
                 if(t){
                     CONTEXT c{};c.ContextFlags=CONTEXT_DEBUG_REGISTERS|CONTEXT_CONTROL;
                     if(GetThreadContext(t,&c)){
-                        std::string info=ModuleInfo(pid,c.Eip);
-                        if(log)log<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr6="<<Hex(c.Dr6)<<" "<<info<<"\n";
-                        std::cout<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" "<<info<<"\n";
+                        int dr=-1; for(int i=0;i<4;i++) if(c.Dr6&(1u<<i)){dr=i;break;} std::string info=ModuleInfo(pid,c.Eip);
+                        if(log)log<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr="<<dr<<" dr6="<<Hex(c.Dr6)<<" "<<info<<"\n";
+                        std::cout<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr="<<dr<<" "<<info<<"\n";
                         c.Dr6=0;SetThreadContext(t,&c);
                     }
                     CloseHandle(t);
