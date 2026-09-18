@@ -128,21 +128,29 @@ BOOL WINAPI HookBitBlt(HDC a,int x,int y,int w,int h,HDC b,int sx,int sy,DWORD r
 BOOL WINAPI HookStretchBlt(HDC a,int x,int y,int w,int h,HDC b,int sx,int sy,int sw,int sh,DWORD rop){++g_counts[StretchBlt_Count];return g_originals.stretch_blt(a,x,y,w,h,b,sx,sy,sw,sh,rop);}
 BOOL WINAPI HookPatBlt(HDC h,int x,int y,int w,int d,DWORD rop){++g_counts[PatBlt_Count];return g_originals.pat_blt(h,x,y,w,d,rop);}
 BOOL WINAPI HookAlphaBlend(HDC a,int x,int y,int w,int h,HDC b,int sx,int sy,int sw,int sh,BLENDFUNCTION f){++g_counts[AlphaBlend_Count];return g_originals.alpha_blend(a,x,y,w,h,b,sx,sy,sw,sh,f);}
+std::wstring ModuleName(HMODULE module){
+    if(!module)return L"<null>";
+    wchar_t path[MAX_PATH]{};
+    DWORD length=GetModuleFileNameW(module,path,MAX_PATH);
+    if(length==0)return L"<unknown>";
+    std::wstring value(path,length);
+    size_t slash=value.find_last_of(L"\\\\/");
+    return slash==std::wstring::npos?value:value.substr(slash+1);
+}
+
 FARPROC WINAPI HookGetProcAddress(HMODULE m,LPCSTR name){
     ++g_counts[GetProcAddress_Count];
     FARPROC result=g_originals.get_proc_address(m,name);
-    if(name && HIWORD(name)!=0 && result){
-        if(std::strcmp(name,"TextOutA")==0 || std::strcmp(name,"TextOutW")==0 ||
-           std::strcmp(name,"ExtTextOutA")==0 || std::strcmp(name,"ExtTextOutW")==0 ||
-           std::strcmp(name,"DrawTextA")==0 || std::strcmp(name,"DrawTextW")==0 ||
-           std::strcmp(name,"GetGlyphOutlineA")==0 || std::strcmp(name,"GetGlyphOutlineW")==0 ||
-           std::strcmp(name,"CreateFontA")==0 || std::strcmp(name,"CreateFontW")==0 ||
-           std::strcmp(name,"CreateFontIndirectA")==0 || std::strcmp(name,"CreateFontIndirectW")==0 ||
-           std::strcmp(name,"GetDIBits")==0 || std::strcmp(name,"BitBlt")==0 ||
-           std::strcmp(name,"StretchBlt")==0 || std::strcmp(name,"PatBlt")==0 ||
-           std::strcmp(name,"AlphaBlend")==0)
-            Log(L"[GetProcAddress] requested="+std::wstring(AnsiToJapanese(name,-1)));
+    std::wstring requested;
+    if(!name){
+        requested=L"<null>";
+    }else if(HIWORD(name)==0){
+        requested=L"#"+std::to_wstring(LOWORD(name));
+    }else{
+        requested=AnsiToJapanese(name,-1);
     }
+    Log(L"[GetProcAddress] module="+ModuleName(m)+L" requested=\\\""+requested+
+        L"\\\" result="+ToHex(reinterpret_cast<UINT_PTR>(result)));
     return result;
 }
 
