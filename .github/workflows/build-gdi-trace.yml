@@ -17,6 +17,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
       - name: Build Win32 Release
         shell: cmd
         run: msbuild tools\\gdi_trace\\NOBU6HD_GDI_Trace.sln /m /p:Configuration=Release /p:Platform=Win32
