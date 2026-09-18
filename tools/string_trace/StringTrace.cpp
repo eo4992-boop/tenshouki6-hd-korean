@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <sstream>
 #include <cstring>
+#include <iomanip>
 
 struct Hit { UINT_PTR address{}; std::string encoding; };
 
@@ -91,18 +92,45 @@ static bool SetBP(HANDLE t,const std::vector<UINT_PTR>& a){
     if(!GetThreadContext(t,&v))return false;
     return v.Dr7==c.Dr7;
 }
-static void SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::ofstream& log){
+static bool SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::ofstream& log,bool suspendThreads){
     HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
-    if(s==INVALID_HANDLE_VALUE){log<<"[THREAD SNAPSHOT ERROR] "<<GetLastError()<<"\n";return;}
+    if(s==INVALID_HANDLE_VALUE){log<<"[THREAD SNAPSHOT ERROR] "<<GetLastError()<<"\n";return false;}
+    bool allOk=true;
     THREADENTRY32 te{sizeof(te)};
     if(Thread32First(s,&te))do{
         if(te.th32OwnerProcessID!=pid)continue;
-        HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,te.th32ThreadID);
-        if(!t){log<<"[THREAD OPEN ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";continue;}
-        if(!SetBP(t,a))log<<"[BREAKPOINT ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";
+        HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION|
+                            (suspendThreads?THREAD_SUSPEND_RESUME:0),FALSE,te.th32ThreadID);
+        if(!t){log<<"[THREAD OPEN ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";allOk=false;continue;}
+        bool suspended=true;
+        if(suspendThreads && SuspendThread(t)==static_cast<DWORD>(-1)){
+            log<<"[THREAD SUSPEND ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";
+            suspended=false;allOk=false;
+        }
+        if(suspended && !SetBP(t,a)){
+            log<<"[BREAKPOINT ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";allOk=false;
+        }
+        if(suspendThreads && suspended)ResumeThread(t);
         CloseHandle(t);
     }while(Thread32Next(s,&te));
     CloseHandle(s);
+    return allOk;
+}
+static std::string CodeBytes(HANDLE p,UINT_PTR address){
+    BYTE bytes[16]{}; SIZE_T got=0;
+    if(!ReadProcessMemory(p,reinterpret_cast<LPCVOID>(address),bytes,sizeof(bytes),&got)||got==0)return "<unreadable>";
+    std::ostringstream x; x<<std::hex<<std::uppercase<<std::setfill('0');
+    for(SIZE_T i=0;i<got;++i){if(i)x<<' ';x<<std::setw(2)<<static_cast<unsigned>(bytes[i]);}
+    return x.str();
+}
+static const char* AccessKindFromSlot(const CONTEXT& c,int slot){
+    DWORD rw=(c.Dr7>>(16+slot*4))&3u;
+    if(rw==0)return "EXEC"; if(rw==1)return "WRITE"; if(rw==3)return "READ_WRITE"; return "UNKNOWN";
+}
+static std::vector<UINT_PTR> Group(const std::vector<Hit>& hits,size_t group){
+    std::vector<UINT_PTR> out; const size_t begin=group*4;
+    for(size_t i=begin;i<hits.size()&&i<begin+4;++i)out.push_back(hits[i].address);
+    return out;
 }
 static void Pause(const char* m,DWORD e){
     std::cerr<<"\nERROR: "<<m<<" (Win32="<<e<<")\nPress Enter to exit...";
@@ -115,7 +143,7 @@ int wmain(int argc,wchar_t* argv[]){
     const std::string t8=Utf8(target),logPath="nobu_string_trace_v2.txt";
     std::ofstream log(logPath,std::ios::binary|std::ios::trunc);
     if(log){const unsigned char bom[]={0xEF,0xBB,0xBF};log.write((const char*)bom,3);}
-    std::cout<<"=== NOBU6HD STRING TRACE V2 START ===\nTARGET=\""<<t8<<"\"\n";
+    std::cout<<"=== NOBU6HD STRING TRACE V2.2 START ===\nTARGET=\""<<t8<<"\"\n";
     if(log)log<<"=== NOBU6HD STRING TRACE V2 START ===\nTARGET=\""<<t8<<"\"\n";
     const std::wstring exe=L"NOBU6HD_JP.exe";DWORD pid=0;
     HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
@@ -132,21 +160,34 @@ int wmain(int argc,wchar_t* argv[]){
     std::cout<<"FOUND="<<hits.size()<<"\n";if(log)log<<"FOUND="<<hits.size()<<"\n";
     for(auto&h:hits){std::cout<<"[STRING] encoding="<<h.encoding<<" address="<<Hex(h.address)<<"\n";if(log)log<<"[STRING] encoding="<<h.encoding<<" address="<<Hex(h.address)<<"\n";}
     if(hits.empty()){if(log)log<<"NO_MATCH\n";std::cout<<"Press Enter to exit...";std::string x;std::getline(std::cin,x);return 0;}
-    std::vector<UINT_PTR> addr;
-    for(size_t i=0;i<hits.size()&&i<4;i++)addr.push_back(hits[i].address);
+    const size_t groupCount=(hits.size()+3)/4;
+    size_t currentGroup=0;
+    std::vector<UINT_PTR> addr=Group(hits,currentGroup);
+    if(log)log<<"[GROUPS] candidates="<<hits.size()<<" groups="<<groupCount<<" rotation_ms=750\n";
     if(!DebugActiveProcess(pid)){
         DWORD e=GetLastError();if(log)log<<"[DEBUG ATTACH ERROR] win32="<<e<<"\n";Pause("DebugActiveProcess failed",e);return 3;
     }
     if(log)log<<"[DEBUG ATTACHED]\n";
     std::cout<<"[DEBUG ATTACHED]\n";
-    SetAll(pid,addr,log);
-    if(log)log<<"[BREAKPOINTS] requested="<<addr.size()<<"\n";
-    std::cout<<"[BREAKPOINTS] requested="<<addr.size()<<"\n";
+    SetAll(pid,addr,log,false);
+    if(log)log<<"[BREAKPOINTS] group="<<currentGroup+1<<"/"<<groupCount<<" requested="<<addr.size()<<"\n";
+    std::cout<<"[BREAKPOINTS] group="<<currentGroup+1<<"/"<<groupCount<<" requested="<<addr.size()<<"\n";
+    ULONGLONG lastRotate=GetTickCount64();
     bool run=true;
     while(run){
         DEBUG_EVENT ev{};
-        if(!WaitForDebugEvent(&ev,INFINITE)){
-            DWORD e=GetLastError();if(log)log<<"[DEBUG WAIT ERROR] win32="<<e<<"\n";break;
+        if(!WaitForDebugEvent(&ev,100)){
+            DWORD waitError=GetLastError();
+            if(waitError!=ERROR_SEM_TIMEOUT){
+                if(log)log<<"[DEBUG WAIT ERROR] win32="<<waitError<<"\n";break;
+            }
+            if(GetTickCount64()-lastRotate>=750 && groupCount>1){
+                currentGroup=(currentGroup+1)%groupCount; addr=Group(hits,currentGroup);
+                bool ok=SetAll(pid,addr,log,true); lastRotate=GetTickCount64();
+                if(log)log<<"[BREAKPOINT ROTATE] group="<<currentGroup+1<<"/"<<groupCount<<" requested="<<addr.size()<<" ok="<<(ok?1:0)<<"\n";
+                std::cout<<"[BREAKPOINT ROTATE] group="<<currentGroup+1<<"/"<<groupCount<<" requested="<<addr.size()<<" ok="<<(ok?1:0)<<"\n";
+            }
+            continue;
         }
         DWORD cs=DBG_CONTINUE;
         switch(ev.dwDebugEventCode){
