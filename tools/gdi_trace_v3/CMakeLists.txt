@@ -1,8 +1,0 @@
-cmake_minimum_required(VERSION 3.20)
-project(NOBU6HD_GDI_TRACE_V3 LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 17)
-add_library(NOBU6HD_GDI_TRACE_V3 SHARED HookDLL.cpp)
-target_link_libraries(NOBU6HD_GDI_TRACE_V3 PRIVATE psapi)
-add_executable(NOBU6HD_GDI_Trace_V3 Injector.cpp)
-set_target_properties(NOBU6HD_GDI_TRACE_V3 PROPERTIES OUTPUT_NAME "NOBU6HD_GDI_TRACE_V3")
-set_target_properties(NOBU6HD_GDI_Trace_V3 PROPERTIES OUTPUT_NAME "NOBU6HD_GDI_Trace_V3")
