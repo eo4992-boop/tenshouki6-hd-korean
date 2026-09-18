@@ -1,5 +1,9 @@
 name: Build NOBU6HD GDI Trace V3
 on:
+  push:
+    paths:
+      - "tools/gdi_trace_v3/**"
+      - ".github/workflows/build-gdi-trace-v3.yml"
   workflow_dispatch:
 jobs:
   build:
