@@ -85,7 +85,7 @@ static bool SetBP(HANDLE t,const std::vector<UINT_PTR>& a){
         c.Dr7|=1u<<(i*2);
         c.Dr7|=3u<<(16+i*4); c.Dr7|=3u<<(18+i*4);
     }
-    return SetThreadContext(t,&c)!=FALSE;
+    if(!SetThreadContext(t,&c)) return false;\n    CONTEXT v{};v.ContextFlags=CONTEXT_DEBUG_REGISTERS;\n    if(!GetThreadContext(t,&v)) return false;\n    return v.Dr7==c.Dr7;
 }
 static void SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::ofstream& log){
     HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
@@ -154,12 +154,12 @@ int wmain(int argc,wchar_t* argv[]){
         switch(ev.dwDebugEventCode){
         case CREATE_PROCESS_DEBUG_EVENT:
             if(log)log<<"[DEBUG CREATE_PROCESS] pid="<<ev.dwProcessId<<"\n";
-            if(ev.u.CreateProcessInfo.hThread)SetBP(ev.u.CreateProcessInfo.hThread,addr);
+            if(ev.u.CreateProcessInfo.hThread){ bool ok=SetBP(ev.u.CreateProcessInfo.hThread,addr); if(log) log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\\n"; }
             if(ev.u.CreateProcessInfo.hFile)CloseHandle(ev.u.CreateProcessInfo.hFile);
             break;
         case CREATE_THREAD_DEBUG_EVENT:
             if(log)log<<"[DEBUG CREATE_THREAD] tid="<<ev.dwThreadId<<"\n";
-            if(ev.u.CreateThread.hThread)SetBP(ev.u.CreateThread.hThread,addr);
+            if(ev.u.CreateThread.hThread){ bool ok=SetBP(ev.u.CreateThread.hThread,addr); if(log) log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\\n"; }
             break;
         case LOAD_DLL_DEBUG_EVENT:
             if(log)log<<"[DEBUG LOAD_DLL]\n";
