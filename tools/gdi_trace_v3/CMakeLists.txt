@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.20)
+project(nobu6hd_gdi_trace_v3 LANGUAGES CXX)
+add_library(nobu6hd_gdi_trace_v3 SHARED gdi_trace_v3.cpp)
+target_compile_features(nobu6hd_gdi_trace_v3 PRIVATE cxx_std_17)
+set_target_properties(nobu6hd_gdi_trace_v3 PROPERTIES OUTPUT_NAME "NOBU6HD_GDI_TRACE_V3")
