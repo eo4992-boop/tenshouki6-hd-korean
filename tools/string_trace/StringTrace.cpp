@@ -83,9 +83,13 @@ static bool SetBP(HANDLE t,const std::vector<UINT_PTR>& a){
         UINT_PTR x=a[i]&~(UINT_PTR)3;
         switch(i){case 0:c.Dr0=x;break;case 1:c.Dr1=x;break;case 2:c.Dr2=x;break;case 3:c.Dr3=x;break;}
         c.Dr7|=1u<<(i*2);
-        c.Dr7|=3u<<(16+i*4); c.Dr7|=3u<<(18+i*4);
+        c.Dr7|=3u<<(16+i*4);
+        c.Dr7|=3u<<(18+i*4);
     }
-    if(!SetThreadContext(t,&c)) return false;\n    CONTEXT v{};v.ContextFlags=CONTEXT_DEBUG_REGISTERS;\n    if(!GetThreadContext(t,&v)) return false;\n    return v.Dr7==c.Dr7;
+    if(!SetThreadContext(t,&c))return false;
+    CONTEXT v{};v.ContextFlags=CONTEXT_DEBUG_REGISTERS;
+    if(!GetThreadContext(t,&v))return false;
+    return v.Dr7==c.Dr7;
 }
 static void SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::ofstream& log){
     HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
@@ -128,7 +132,6 @@ int wmain(int argc,wchar_t* argv[]){
     std::cout<<"FOUND="<<hits.size()<<"\n";if(log)log<<"FOUND="<<hits.size()<<"\n";
     for(auto&h:hits){std::cout<<"[STRING] encoding="<<h.encoding<<" address="<<Hex(h.address)<<"\n";if(log)log<<"[STRING] encoding="<<h.encoding<<" address="<<Hex(h.address)<<"\n";}
     if(hits.empty()){if(log)log<<"NO_MATCH\n";std::cout<<"Press Enter to exit...";std::string x;std::getline(std::cin,x);return 0;}
-
     std::vector<UINT_PTR> addr;
     for(size_t i=0;i<hits.size()&&i<4;i++)addr.push_back(hits[i].address);
     if(!DebugActiveProcess(pid)){
@@ -136,14 +139,9 @@ int wmain(int argc,wchar_t* argv[]){
     }
     if(log)log<<"[DEBUG ATTACHED]\n";
     std::cout<<"[DEBUG ATTACHED]\n";
-
-    /* V2: wait for real access. Do not detach just because an unrelated debug
-       event occurs. Log process/thread/exception events and keep the debugger
-       attached until the game actually exits. */
     SetAll(pid,addr,log);
     if(log)log<<"[BREAKPOINTS] requested="<<addr.size()<<"\n";
     std::cout<<"[BREAKPOINTS] requested="<<addr.size()<<"\n";
-
     bool run=true;
     while(run){
         DEBUG_EVENT ev{};
@@ -154,12 +152,12 @@ int wmain(int argc,wchar_t* argv[]){
         switch(ev.dwDebugEventCode){
         case CREATE_PROCESS_DEBUG_EVENT:
             if(log)log<<"[DEBUG CREATE_PROCESS] pid="<<ev.dwProcessId<<"\n";
-            if(ev.u.CreateProcessInfo.hThread){ bool ok=SetBP(ev.u.CreateProcessInfo.hThread,addr); if(log) log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\\n"; }
+            if(ev.u.CreateProcessInfo.hThread){bool ok=SetBP(ev.u.CreateProcessInfo.hThread,addr);if(log)log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\n";}
             if(ev.u.CreateProcessInfo.hFile)CloseHandle(ev.u.CreateProcessInfo.hFile);
             break;
         case CREATE_THREAD_DEBUG_EVENT:
             if(log)log<<"[DEBUG CREATE_THREAD] tid="<<ev.dwThreadId<<"\n";
-            if(ev.u.CreateThread.hThread){ bool ok=SetBP(ev.u.CreateThread.hThread,addr); if(log) log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\\n"; }
+            if(ev.u.CreateThread.hThread){bool ok=SetBP(ev.u.CreateThread.hThread,addr);if(log)log<<"[BP VERIFY] tid="<<ev.dwThreadId<<" ok="<<(ok?1:0)<<"\n";}
             break;
         case LOAD_DLL_DEBUG_EVENT:
             if(log)log<<"[DEBUG LOAD_DLL]\n";
@@ -175,7 +173,8 @@ int wmain(int argc,wchar_t* argv[]){
                 if(t){
                     CONTEXT c{};c.ContextFlags=CONTEXT_DEBUG_REGISTERS|CONTEXT_CONTROL;
                     if(GetThreadContext(t,&c)){
-                        int dr=-1; for(int i=0;i<4;i++) if(c.Dr6&(1u<<i)){dr=i;break;} std::string info=ModuleInfo(pid,c.Eip);
+                        int dr=-1;for(int i=0;i<4;i++)if(c.Dr6&(1u<<i)){dr=i;break;}
+                        std::string info=ModuleInfo(pid,c.Eip);
                         if(log)log<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr="<<dr<<" dr6="<<Hex(c.Dr6)<<" "<<info<<"\n";
                         std::cout<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr="<<dr<<" "<<info<<"\n";
                         c.Dr6=0;SetThreadContext(t,&c);
