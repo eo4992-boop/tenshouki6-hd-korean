@@ -25,7 +25,7 @@ DWORD g_counts[CounterCount]{};
 std::wstring GetLogPath() {
     wchar_t buffer[MAX_PATH]{};
     DWORD length = GetTempPathW(MAX_PATH, buffer);
-    if (length == 0 || length >= MAX_PATH) return L"C:\Temp\nobu_gdi_trace.txt";
+    if (length == 0 || length >= MAX_PATH) return L"C:\\Temp\\nobu_gdi_trace.txt";
     return std::wstring(buffer) + L"nobu_gdi_trace.txt";
 }
 
