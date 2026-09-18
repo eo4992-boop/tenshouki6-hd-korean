@@ -5,6 +5,7 @@
 #include <mutex>
 #include <sstream>
 #include <cstring>
+#include <intrin.h>
 
 #pragma comment(lib, "psapi.lib")
 
@@ -138,9 +139,39 @@ std::wstring ModuleName(HMODULE module){
     return slash==std::wstring::npos?value:value.substr(slash+1);
 }
 
+struct CallSiteInfo {
+    HMODULE module{};
+    UINT_PTR address{};
+    UINT_PTR rva{};
+};
+
+CallSiteInfo GetCallSite() {
+    CallSiteInfo info{};
+    info.address = reinterpret_cast<UINT_PTR>(_ReturnAddress());
+    HMODULE module = nullptr;
+    if (info.address &&
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(info.address), &module)) {
+        info.module = module;
+        BYTE* base = reinterpret_cast<BYTE*>(module);
+        if (base && info.address >= reinterpret_cast<UINT_PTR>(base))
+            info.rva = info.address - reinterpret_cast<UINT_PTR>(base);
+    }
+    return info;
+}
+
+thread_local bool g_in_getproc_hook = false;
+
 FARPROC WINAPI HookGetProcAddress(HMODULE m,LPCSTR name){
     ++g_counts[GetProcAddress_Count];
-    FARPROC result=g_originals.get_proc_address(m,name);
+
+    if (g_in_getproc_hook)
+        return g_originals.get_proc_address(m,name);
+
+    g_in_getproc_hook = true;
+    FARPROC result = g_originals.get_proc_address(m,name);
+
     std::wstring requested;
     if(!name){
         requested=L"<null>";
@@ -149,8 +180,16 @@ FARPROC WINAPI HookGetProcAddress(HMODULE m,LPCSTR name){
     }else{
         requested=AnsiToJapanese(name,-1);
     }
-    Log(L"[GetProcAddress] module="+ModuleName(m)+L" requested=\\\""+requested+
-        L"\\\" result="+ToHex(reinterpret_cast<UINT_PTR>(result)));
+
+    CallSiteInfo caller = GetCallSite();
+    Log(L"[GetProcAddress] module="+ModuleName(m)+
+        L" requested=\"" + requested +
+        L"\" result=" + ToHex(reinterpret_cast<UINT_PTR>(result)) +
+        L" caller_module=" + ModuleName(caller.module) +
+        L" caller=" + ToHex(caller.address) +
+        L" caller_rva=" + ToHex(caller.rva));
+
+    g_in_getproc_hook = false;
     return result;
 }
 
@@ -218,7 +257,7 @@ bool PatchModule(HMODULE module){
 
 DWORD WINAPI TraceWorker(LPVOID){
     g_log_path=GetLogPath(); DeleteFileW(g_log_path.c_str());
-    Log(L"=== NOBU6HD GDI TRACE V2 START ==="); Log(L"PID="+std::to_wstring(GetCurrentProcessId()));
+    Log(L"=== NOBU6HD GDI TRACE V3 START ==="); Log(L"PID="+std::to_wstring(GetCurrentProcessId()));
     HMODULE modules[1024]{}; DWORD bytes=0,changed=0;
     if(EnumProcessModules(GetCurrentProcess(),modules,sizeof(modules),&bytes)){
         unsigned count=bytes/sizeof(HMODULE);
