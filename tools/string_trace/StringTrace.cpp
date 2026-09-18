@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <codecvt>
 
 #pragma comment(lib, "psapi.lib")
 
@@ -137,136 +138,25 @@ static bool SetOnAllThreads(DWORD pid, const std::vector<UINT_PTR>& addresses) {
     return ok;
 }
 
-static std::wstring CallerInfo(DWORD eip) {
-    HMODULE m = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>((UINT_PTR)eip), &m))
-        return L"caller_module=<unknown> caller=0x" + std::to_wstring(eip);
-    MODULEINFO mi{};
-    GetModuleInformation(GetCurrentProcess(), m, &mi, sizeof(mi));
-    UINT_PTR base = reinterpret_cast<UINT_PTR>(mi.lpBaseOfDll);
-    UINT_PTR rva = eip >= base ? eip - base : 0;
-    std::wstringstream s;
-    s << L"caller_module=" << ModuleName(m)
-      << L" caller=0x" << std::hex << std::uppercase << eip
-      << L" caller_rva=0x" << rva;
-    return s.str();
-}
-
-int wmain(int argc, wchar_t** argv) {
-    const wchar_t* exe = L"NOBU6HD_JP.exe";
-    std::wstring target = argc >= 2 ? argv[1] : L"織田信長";
-    std::wofstream log("nobu_string_trace.txt", std::ios::out | std::ios::trunc);
-    log.imbue(std::locale(log.getloc(), new std::codecvt_utf8<wchar_t>));
-
-    std::wcout << L"NOBU6HD String Trace V1\n";
-    std::wcout << L"Target: " << target << L"\n";
-
-    DWORD pid = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32W p{sizeof(p)};
-        if (Process32FirstW(snap, &p)) do {
-            if (!_wcsicmp(p.szExeFile, exe)) { pid = p.th32ProcessID; break; }
-        } while (Process32NextW(snap, &p));
-        CloseHandle(snap);
-    }
-    if (!pid) {
-        std::wcerr << L"ERROR: Start NOBU6HD_JP.exe first.\n";
-        return 1;
-    }
-
-    HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_OPERATION |
-                                 PROCESS_VM_WRITE | PROCESS_CREATE_THREAD, FALSE, pid);
-    if (!process) {
-        std::wcerr << L"ERROR: OpenProcess failed: " << GetLastError() << L"\n";
-        return 2;
-    }
-
-    Log(log, L"=== NOBU6HD STRING TRACE V1 START ===");
-    Log(log, L"PID=" + std::to_wstring(pid));
-    Log(log, L"TARGET=\"" + target + L"\"");
-
-    auto hits = ScanProcess(process, target);
-    std::wcout << L"Found " << hits.size() << L" candidate address(es).\n";
-    Log(log, L"FOUND=" + std::to_wstring(hits.size()));
-    for (const auto& h : hits) {
-        std::wstringstream s;
-        s << L"[STRING] encoding=" << h.encoding << L" address=0x"
-          << std::hex << std::uppercase << h.address;
-        Log(log, s.str());
-        std::wcout << L"  " << Ansi932ToWide(h.encoding) << L" " << Hex(h.address) << L"\n";
-    }
-
-    if (hits.empty()) {
-        Log(log, L"NO_MATCH: target is not present in readable process memory at scan time.");
-        std::wcout << L"No match. Try a screen where the exact string is visible.\n";
-        CloseHandle(process);
-        return 3;
-    }
-
-    std::vector<UINT_PTR> bp;
-    for (const auto& h : hits) {
-        if (bp.size() >= 4) break;
-        bp.push_back(h.address);
-    }
-    Log(log, L"[BREAKPOINTS] hardware_data_breakpoints=" + std::to_wstring(bp.size()));
-    if (!DebugActiveProcess(pid)) {
-        std::wcerr << L"ERROR: DebugActiveProcess failed: " << GetLastError() << L"\n";
-        Log(log, L"ERROR: DebugActiveProcess failed=" + std::to_wstring(GetLastError()));
-        CloseHandle(process);
-        return 4;
-    }
-    DebugSetProcessKillOnExit(FALSE);
-
-    bool configured = false;
-    DEBUG_EVENT ev{};
-    while (WaitForDebugEvent(&ev, INFINITE)) {
-        DWORD continueStatus = DBG_CONTINUE;
-        if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) {
-            HANDLE h = ev.u.CreateProcessInfo.hProcess;
-            if (h) CloseHandle(h);
-            configured = SetOnAllThreads(pid, bp);
-            Log(log, L"[DEBUG] process attached; hardware breakpoints configured=" + std::to_wstring(configured ? 1 : 0));
-        } else if (ev.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT) {
-            if (ev.u.CreateThread.hThread) {
-                SetDataBreakpoints(ev.u.CreateThread.hThread, bp);
-                CloseHandle(ev.u.CreateThread.hThread);
-            }
-        } else if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
-            auto& ex = ev.u.Exception.ExceptionRecord;
-            if (ex.ExceptionCode == EXCEPTION_SINGLE_STEP) {
-                HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, ev.dwThreadId);
-                DWORD eip = 0;
-                DWORD dr6 = 0;
-                if (t) {
-                    CONTEXT c{};
-                    c.ContextFlags = CONTEXT_CONTROL | CONTEXT_DEBUG_REGISTERS;
-                    if (GetThreadContext(t, &c)) { eip = c.Eip; dr6 = c.Dr6; }
-                    CloseHandle(t);
-                }
+static std::wstring CallerInfo(DWORD pid, DWORD eip) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return L"caller_module=<unknown>";
+    MODULEENTRY32W me{sizeof(me)};
+    std::wstring result = L"caller_module=<unknown>";
+    if (Module32FirstW(snap, &me)) {
+        do {
+            UINT_PTR base = reinterpret_cast<UINT_PTR>(me.modBaseAddr);
+            UINT_PTR end = base + me.modBaseSize;
+            if ((UINT_PTR)eip >= base && (UINT_PTR)eip < end) {
                 std::wstringstream s;
-                s << L"[STRING ACCESS] thread=" << ev.dwThreadId
-                  << L" dr6=0x" << std::hex << std::uppercase << dr6
-                  << L" eip=0x" << eip << L" " << CallerInfo(eip);
-                Log(log, s.str());
-                std::wcout << s.str() << L"\n";
-            } else if (ex.ExceptionCode == EXCEPTION_BREAKPOINT) {
-                // Ignore the debugger's initial breakpoint.
-            } else {
-                continueStatus = DBG_EXCEPTION_NOT_HANDLED;
+                s << L"caller_module=" << me.szModule
+                  << L" caller=0x" << std::hex << std::uppercase << eip
+                  << L" caller_rva=0x" << ((UINT_PTR)eip - base);
+                result = s.str();
+                break;
             }
-        } else if (ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
-            Log(log, L"=== PROCESS EXIT ===");
-            ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, continueStatus);
-            break;
-        }
-        ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, continueStatus);
+        } while (Module32NextW(snap, &me));
     }
-
-    DebugActiveProcessStop(pid);
-    CloseHandle(process);
-    Log(log, L"=== NOBU6HD STRING TRACE V1 END ===");
-    return 0;
+    CloseHandle(snap);
+    return result;
 }
