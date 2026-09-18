@@ -11,16 +11,27 @@
 
 struct Hit { UINT_PTR address{}; std::string encoding; };
 
+static std::string Utf8(const std::wstring& s) {
+    if (s.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), n, nullptr, nullptr);
+    return out;
+}
 static std::string Hex(UINT_PTR v) {
     std::ostringstream s; s << "0x" << std::hex << std::uppercase << v; return s.str();
 }
-static std::wstring ModuleInfo(DWORD pid, UINT_PTR address) {
+static std::string ModuleInfo(DWORD pid, UINT_PTR address) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snap == INVALID_HANDLE_VALUE) return L"<unknown>";
-    MODULEENTRY32W me{sizeof(me)}; std::wstring r=L"<unknown>";
+    if (snap == INVALID_HANDLE_VALUE) return "<unknown>";
+    MODULEENTRY32W me{sizeof(me)}; std::string r="<unknown>";
     if (Module32FirstW(snap,&me)) do {
         UINT_PTR b=(UINT_PTR)me.modBaseAddr, e=b+me.modBaseSize;
-        if(address>=b && address<e){std::wstringstream s;s<<me.szModule<<L" caller=0x"<<std::hex<<std::uppercase<<address<<L" caller_rva=0x"<<address-b;r=s.str();break;}
+        if(address>=b && address<e){
+            std::ostringstream s; s << Utf8(me.szModule) << " caller=" << Hex(address)
+              << " caller_rva=" << Hex(address-b); r=s.str(); break;
+        }
     } while(Module32NextW(snap,&me));
     CloseHandle(snap); return r;
 }
@@ -46,54 +57,114 @@ static std::vector<Hit> Scan(HANDLE p,const std::wstring& target) {
         if(rd) for(UINT_PTR pos=b;pos<e;){
             SIZE_T want=(SIZE_T)std::min<UINT_PTR>(buf.size(),e-pos),got=0;
             if(ReadProcessMemory(p,(LPCVOID)pos,buf.data(),want,&got)&&got){
-                auto find=[&](const std::vector<BYTE>& n,const char* enc){if(n.empty()||got<n.size())return;for(SIZE_T i=0;i+n.size()<=got;i++)if(memcmp(buf.data()+i,n.data(),n.size())==0){UINT_PTR h=pos+i;if(std::none_of(hits.begin(),hits.end(),[h](const Hit&x){return x.address==h;}))hits.push_back({h,enc});if(hits.size()>=32)return;}};
-                find(cp,"CP932");find(u16,"UTF16");if(hits.size()>=32)return hits;
+                auto find=[&](const std::vector<BYTE>& n,const char* enc){
+                    if(n.empty()||got<n.size())return;
+                    for(SIZE_T i=0;i+n.size()<=got;i++) if(memcmp(buf.data()+i,n.data(),n.size())==0){
+                        UINT_PTR h=pos+i;
+                        if(std::none_of(hits.begin(),hits.end(),[h](const Hit&x){return x.address==h;}))hits.push_back({h,enc});
+                        if(hits.size()>=32)return;
+                    }
+                };
+                find(cp,"CP932"); find(u16,"UTF16"); if(hits.size()>=32)return hits;
             }
-            if(!got)break;pos+=got;
+            if(!got)break; pos+=got;
         }
         a=e;
     }
     return hits;
 }
 static bool SetBP(HANDLE t,const std::vector<UINT_PTR>& a) {
-    CONTEXT c{};c.ContextFlags=CONTEXT_DEBUG_REGISTERS;if(!GetThreadContext(t,&c))return false;
-    c.Dr0=c.Dr1=c.Dr2=c.Dr3=0;c.Dr6=0;c.Dr7=0;
-    for(size_t i=0;i<a.size()&&i<4;i++){switch(i){case 0:c.Dr0=a[i];break;case 1:c.Dr1=a[i];break;case 2:c.Dr2=a[i];break;case 3:c.Dr3=a[i];break;}c.Dr7|=1u<<(i*2);c.Dr7|=3u<<(16+i*4);}
+    CONTEXT c{}; c.ContextFlags=CONTEXT_DEBUG_REGISTERS; if(!GetThreadContext(t,&c))return false;
+    c.Dr0=c.Dr1=c.Dr2=c.Dr3=0; c.Dr6=0; c.Dr7=0;
+    for(size_t i=0;i<a.size()&&i<4;i++){
+        switch(i){case 0:c.Dr0=a[i];break;case 1:c.Dr1=a[i];break;case 2:c.Dr2=a[i];break;case 3:c.Dr3=a[i];break;}
+        c.Dr7|=1u<<(i*2); c.Dr7|=3u<<(16+i*4);
+    }
     return SetThreadContext(t,&c)!=FALSE;
 }
-static void SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::wofstream& log){
-    HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);if(s==INVALID_HANDLE_VALUE){log<<L"[THREAD SNAPSHOT ERROR] "<<GetLastError()<<L"\n";return;}
-    THREADENTRY32 te{sizeof(te)};if(Thread32First(s,&te))do{if(te.th32OwnerProcessID!=pid)continue;HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,te.th32ThreadID);if(!t){log<<L"[THREAD OPEN ERROR] thread="<<te.th32ThreadID<<L" win32="<<GetLastError()<<L"\n";continue;}if(!SetBP(t,a))log<<L"[BREAKPOINT ERROR] thread="<<te.th32ThreadID<<L" win32="<<GetLastError()<<L"\n";CloseHandle(t);}while(Thread32Next(s,&te));CloseHandle(s);
+static void SetAll(DWORD pid,const std::vector<UINT_PTR>& a,std::ofstream& log){
+    HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
+    if(s==INVALID_HANDLE_VALUE){log<<"[THREAD SNAPSHOT ERROR] "<<GetLastError()<<"\n";return;}
+    THREADENTRY32 te{sizeof(te)};
+    if(Thread32First(s,&te))do{
+        if(te.th32OwnerProcessID!=pid)continue;
+        HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,te.th32ThreadID);
+        if(!t){log<<"[THREAD OPEN ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";continue;}
+        if(!SetBP(t,a))log<<"[BREAKPOINT ERROR] thread="<<te.th32ThreadID<<" win32="<<GetLastError()<<"\n";
+        CloseHandle(t);
+    }while(Thread32Next(s,&te));
+    CloseHandle(s);
 }
-static void PauseOnError(const wchar_t* msg,DWORD err){
-    std::wcerr<<L"\nERROR: "<<msg<<L" (Win32="<<err<<L")\nPress Enter to exit...";
-    std::wstring x;std::getline(std::wcin,x);
+static void Pause(const char* msg,DWORD err){
+    std::cerr<<"\nERROR: "<<msg<<" (Win32="<<err<<")\nPress Enter to exit...";
+    std::string x; std::getline(std::cin,x);
 }
 int wmain(int argc,wchar_t* argv[]){
-    const std::wstring target=argc>=2?argv[1]:L"織田信長", exe=L"NOBU6HD_JP.exe", logPath=L"nobu_string_trace.txt";
-    std::wofstream log(logPath,std::ios::out|std::ios::trunc);
-    std::wcout<<L"=== NOBU6HD STRING TRACE V1 ===\nTarget: "<<target<<L"\n";
-    if(log)log<<L"=== NOBU6HD STRING TRACE V1 START ===\nTARGET=\""<<target<<L"\"\n";
-    DWORD pid=0;HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
-    if(s!=INVALID_HANDLE_VALUE){PROCESSENTRY32W pe{sizeof(pe)};if(Process32FirstW(s,&pe))do{if(_wcsicmp(pe.szExeFile,exe.c_str())==0){pid=pe.th32ProcessID;break;}}while(Process32NextW(s,&pe));CloseHandle(s);}
-    std::wcout<<L"Process: "<<(pid?L"FOUND":L"NOT FOUND")<<L" (PID="<<pid<<L")\n";
-    if(log)log<<L"PID="<<pid<<L"\n";
-    if(!pid){if(log)log<<L"ERROR: NOBU6HD_JP.exe not found\n";PauseOnError(L"NOBU6HD_JP.exe not found",0);return 1;}
-    HANDLE p=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,pid);if(!p){DWORD e=GetLastError();if(log)log<<L"OpenProcess failed win32="<<e<<L"\n";PauseOnError(L"OpenProcess failed",e);return 2;}
-    std::wcout<<L"Scanning process memory...\n";auto hits=Scan(p,target);CloseHandle(p);
-    std::wcout<<L"Found "<<hits.size()<<L" candidate(s).\n";if(log)log<<L"FOUND="<<hits.size()<<L"\n";
-    for(auto&h:hits){std::wcout<<L"  "<<h.encoding.c_str()<<L" "<<Hex(h.address).c_str()<<L"\n";if(log)log<<L"[STRING] encoding="<<(h.encoding=="CP932"?L"CP932":L"UTF16")<<L" address="<<Hex(h.address).c_str()<<L"\n";}
-    if(hits.empty()){if(log)log<<L"NO_MATCH\n";std::wcout<<L"No match. Press Enter to exit...";std::wstring x;std::getline(std::wcin,x);return 0;}
+    SetConsoleOutputCP(CP_UTF8); SetConsoleCP(CP_UTF8);
+    const std::wstring target=argc>=2?argv[1]:L"織田信長";
+    const std::string target8=Utf8(target);
+    const std::wstring exe=L"NOBU6HD_JP.exe";
+    const std::string logPath="nobu_string_trace.txt";
+    std::ofstream log(logPath,std::ios::out|std::ios::trunc);
+    std::cout<<"=== NOBU6HD STRING TRACE V1 ===\nTarget: "<<target8<<"\n";
+    if(log)log<<"=== NOBU6HD STRING TRACE V1 START ===\nTARGET=\""<<target8<<"\"\n";
+    DWORD pid=0; HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    if(s!=INVALID_HANDLE_VALUE){
+        PROCESSENTRY32W pe{sizeof(pe)};
+        if(Process32FirstW(s,&pe))do{if(_wcsicmp(pe.szExeFile,exe.c_str())==0){pid=pe.th32ProcessID;break;}}while(Process32NextW(s,&pe));
+        CloseHandle(s);
+    }
+    std::cout<<"Process: "<<(pid?"FOUND":"NOT FOUND")<<" (PID="<<pid<<")\n";
+    if(log)log<<"PID="<<pid<<"\n";
+    if(!pid){if(log)log<<"ERROR: NOBU6HD_JP.exe not found\n";Pause("NOBU6HD_JP.exe not found",0);return 1;}
+    HANDLE p=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,pid);
+    if(!p){DWORD e=GetLastError();if(log)log<<"OpenProcess failed win32="<<e<<"\n";Pause("OpenProcess failed",e);return 2;}
+    std::cout<<"Scanning process memory...\n";
+    auto hits=Scan(p,target); CloseHandle(p);
+    std::cout<<"Found "<<hits.size()<<" candidate(s).\n"; if(log)log<<"FOUND="<<hits.size()<<"\n";
+    for(auto&h:hits){std::cout<<"  "<<h.encoding<<" "<<Hex(h.address)<<"\n";if(log)log<<"[STRING] encoding="<<(h.encoding=="CP932"?"CP932":"UTF16")<<" address="<<Hex(h.address)<<"\n";}
+    if(hits.empty()){if(log)log<<"NO_MATCH\n";std::cout<<"No match. Press Enter to exit...";std::string x;std::getline(std::cin,x);return 0;}
     std::vector<UINT_PTR> addr;for(size_t i=0;i<hits.size()&&i<4;i++)addr.push_back(hits[i].address);
-    if(!DebugActiveProcess(pid)){DWORD e=GetLastError();if(log)log<<L"[DEBUG ATTACH ERROR] win32="<<e<<L"\n";PauseOnError(L"DebugActiveProcess failed",e);return 3;}
-    if(log)log<<L"[DEBUG ATTACHED]\n[BREAKPOINTS] requested="<<addr.size()<<L"\n";std::wcout<<L"Debugger attached. Watching string access...\n";
-    bool run=true;while(run){DEBUG_EVENT ev{};if(!WaitForDebugEvent(&ev,INFINITE)){DWORD e=GetLastError();if(log)log<<L"[DEBUG WAIT ERROR] win32="<<e<<L"\n";break;}DWORD cs=DBG_CONTINUE;
+    if(!DebugActiveProcess(pid)){DWORD e=GetLastError();if(log)log<<"[DEBUG ATTACH ERROR] win32="<<e<<"\n";Pause("DebugActiveProcess failed",e);return 3;}
+    if(log)log<<"[DEBUG ATTACHED]\n[BREAKPOINTS] requested="<<addr.size()<<"\n";
+    std::cout<<"Debugger attached. Watching string access...\n";
+    bool run=true;
+    while(run){
+        DEBUG_EVENT ev{}; if(!WaitForDebugEvent(&ev,INFINITE)){DWORD e=GetLastError();if(log)log<<"[DEBUG WAIT ERROR] win32="<<e<<"\n";break;}
+        DWORD cs=DBG_CONTINUE;
         switch(ev.dwDebugEventCode){
-        case CREATE_PROCESS_DEBUG_EVENT: if(ev.u.CreateProcessInfo.hThread)SetBP(ev.u.CreateProcessInfo.hThread,addr);SetAll(pid,addr,log);if(ev.u.CreateProcessInfo.hFile)CloseHandle(ev.u.CreateProcessInfo.hFile);break;
-        case CREATE_THREAD_DEBUG_EVENT: if(ev.u.CreateThread.hThread)SetBP(ev.u.CreateThread.hThread,addr);break;
-        case EXCEPTION_DEBUG_EVENT:{auto& ex=ev.u.Exception;if(ex.ExceptionRecord.ExceptionCode==EXCEPTION_SINGLE_STEP){HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,ev.dwThreadId);if(t){CONTEXT c{};c.ContextFlags=CONTEXT_DEBUG_REGISTERS|CONTEXT_CONTROL;if(GetThreadContext(t,&c)){std::wstring info=ModuleInfo(pid,c.Eip);if(log)log<<L"[STRING ACCESS] thread="<<ev.dwThreadId<<L" dr6="<<Hex(c.Dr6).c_str()<<L" eip="<<Hex(c.Eip).c_str()<<L" "<<info<<L"\n";std::wcout<<L"[STRING ACCESS] eip="<<Hex(c.Eip).c_str()<<L" "<<info<<L"\n";c.Dr6=0;SetThreadContext(t,&c);}CloseHandle(t);}}else if(ex.dwFirstChance==0)cs=DBG_EXCEPTION_NOT_HANDLED;break;}
-        case EXIT_PROCESS_DEBUG_EVENT:run=false;break; default:break;}
+        case CREATE_PROCESS_DEBUG_EVENT:
+            if(ev.u.CreateProcessInfo.hThread)SetBP(ev.u.CreateProcessInfo.hThread,addr);
+            SetAll(pid,addr,log);
+            if(ev.u.CreateProcessInfo.hFile)CloseHandle(ev.u.CreateProcessInfo.hFile);
+            break;
+        case CREATE_THREAD_DEBUG_EVENT:
+            if(ev.u.CreateThread.hThread)SetBP(ev.u.CreateThread.hThread,addr);
+            break;
+        case EXCEPTION_DEBUG_EVENT:{
+            auto& ex=ev.u.Exception;
+            if(ex.ExceptionRecord.ExceptionCode==EXCEPTION_SINGLE_STEP){
+                HANDLE t=OpenThread(THREAD_GET_CONTEXT|THREAD_SET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,ev.dwThreadId);
+                if(t){
+                    CONTEXT c{}; c.ContextFlags=CONTEXT_DEBUG_REGISTERS|CONTEXT_CONTROL;
+                    if(GetThreadContext(t,&c)){
+                        std::string info=ModuleInfo(pid,c.Eip);
+                        if(log)log<<"[STRING ACCESS] thread="<<ev.dwThreadId<<" dr6="<<Hex(c.Dr6)<<" eip="<<Hex(c.Eip)<<" "<<info<<"\n";
+                        std::cout<<"[STRING ACCESS] eip="<<Hex(c.Eip)<<" "<<info<<"\n";
+                        c.Dr6=0; SetThreadContext(t,&c);
+                    }
+                    CloseHandle(t);
+                }
+            } else if(ex.dwFirstChance==0) cs=DBG_EXCEPTION_NOT_HANDLED;
+            break;
+        }
+        case EXIT_PROCESS_DEBUG_EVENT: run=false; break;
+        default: break;
+        }
         ContinueDebugEvent(ev.dwProcessId,ev.dwThreadId,cs);
     }
-    DebugActiveProcessStop(pid);if(log)log<<L"[DEBUG DETACHED]\n";std::wcout<<L"\nTrace ended. Log: "<<logPath<<L"\nPress Enter to exit...";std::wstring x;std::getline(std::wcin,x);return 0;
+    DebugActiveProcessStop(pid);
+    if(log)log<<"[DEBUG DETACHED]\n";
+    std::cout<<"\nTrace ended. Log: "<<logPath<<"\nPress Enter to exit...";
+    std::string x;std::getline(std::cin,x);return 0;
 }
