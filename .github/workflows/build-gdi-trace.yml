@@ -5,10 +5,12 @@ on:
     branches: ["main", "feat/**"]
     paths:
       - "tools/gdi_trace/**"
+      - "tools/string_trace/**"
       - ".github/workflows/build-gdi-trace.yml"
   pull_request:
     paths:
       - "tools/gdi_trace/**"
+      - "tools/string_trace/**"
       - ".github/workflows/build-gdi-trace.yml"
   workflow_dispatch:
 
@@ -28,10 +30,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item tools/gdi_trace/bin/Win32/Release/HookDLL.dll dist/
           Copy-Item tools/gdi_trace/bin/Win32/Release/Injector.exe dist/
-          Copy-Item tools/gdi_trace/README.md dist/README.txt
-          Compress-Archive -Path dist/* -DestinationPath NOBU6HD_GDI_Trace_Win32.zip -Force
+          Copy-Item tools/gdi_trace/README.md dist/GDI_TRACE_README.txt
+          Copy-Item tools/string_trace/bin/Win32/Release/StringTrace.exe dist/
+          Copy-Item tools/string_trace/README.md dist/STRING_TRACE_README.txt
+          Compress-Archive -Path dist/* -DestinationPath NOBU6HD_Trace_Tools_Win32.zip -Force
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NOBU6HD_GDI_Trace_Win32
-          path: NOBU6HD_GDI_Trace_Win32.zip
+          name: NOBU6HD_Trace_Tools_Win32
+          path: NOBU6HD_Trace_Tools_Win32.zip

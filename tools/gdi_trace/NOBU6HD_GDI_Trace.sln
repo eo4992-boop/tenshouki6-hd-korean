@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HookDLL", "HookDLL.vcxproj"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Injector", "Injector.vcxproj", "{A1B2C3D4-E5F6-47A8-9012-223456789002}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StringTrace", "..\\string_trace\\StringTrace.vcxproj", "{A1B2C3D4-E5F6-47A8-9012-223456789003}"
+EndProject
 Global
 GlobalSection(SolutionConfigurationPlatforms) = preSolution
 Debug|Win32 = Debug|Win32
@@ -20,5 +22,9 @@ GlobalSection(ProjectConfigurationPlatforms) = postSolution
 {A1B2C3D4-E5F6-47A8-9012-223456789002}.Debug|Win32.Build.0 = Debug|Win32
 {A1B2C3D4-E5F6-47A8-9012-223456789002}.Release|Win32.ActiveCfg = Release|Win32
 {A1B2C3D4-E5F6-47A8-9012-223456789002}.Release|Win32.Build.0 = Release|Win32
+{A1B2C3D4-E5F6-47A8-9012-223456789003}.Debug|Win32.ActiveCfg = Debug|Win32
+{A1B2C3D4-E5F6-47A8-9012-223456789003}.Debug|Win32.Build.0 = Debug|Win32
+{A1B2C3D4-E5F6-47A8-9012-223456789003}.Release|Win32.ActiveCfg = Release|Win32
+{A1B2C3D4-E5F6-47A8-9012-223456789003}.Release|Win32.Build.0 = Release|Win32
 EndGlobalSection
 EndGlobal

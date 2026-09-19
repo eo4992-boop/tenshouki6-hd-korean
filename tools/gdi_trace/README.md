@@ -1,12 +1,15 @@
-# NOBU6HD GDI Render Trace V2
+# NOBU6HD GDI Render Trace V3
 
 순정 NOBU6HD_JP.exe의 실제 문자 렌더링 경로를 검증하기 위한 비파괴 분석 도구입니다.
 
-## V2에서 추가된 추적
+## V3에서 추가된 추적
 
 기존 GDI 문자 API 추적에 다음을 추가했습니다.
 
-- `GetProcAddress` — 동적으로 GDI API 주소를 획득하는 경로 확인
+- `GetProcAddress` — 동적으로 API 주소를 획득하는 모든 요청을 기록
+- `GetProcAddress`의 ordinal 요청은 `#117` 같은 형태로 기록
+- 호출자 모듈/절대 주소/RVA를 함께 기록해 실제 게임 코드의 요청 위치를 추적
+- 재진입 방지로 후킹 함수 내부의 중복 GetProcAddress 로그를 억제
 - `BitBlt`, `StretchBlt`, `PatBlt`, `AlphaBlend` — 비트맵/래스터 합성 경로 확인
 - Injector가 콘솔을 유지하며 각 Win32 오류를 표시
 
@@ -29,7 +32,7 @@
 6. 게임을 종료합니다.
 7. `%TEMP%\nobu_gdi_trace.txt`를 확인합니다.
 
-V2 Injector는 성공/실패 메시지를 표시하고 Enter를 누를 때까지 창을 유지합니다.
+V3 Injector는 성공/실패 메시지를 표시하고 Enter를 누를 때까지 창을 유지합니다.
 
 ## 해석
 
@@ -50,3 +53,11 @@ msbuild NOBU6HD_GDI_Trace.sln /p:Configuration=Release /p:Platform=Win32
 ```
 
 를 실행할 수 있습니다.
+
+
+## V3 GetProcAddress 로그 예시
+
+    [GetProcAddress] module=KERNEL32.DLL requested="#117" result=0x... caller_module=NOBU6HD_JP.exe caller=0x... caller_rva=0x...
+    [GetProcAddress] module=GDI32.DLL requested="ExtTextOutW" result=0x... caller_module=NOBU6HD_JP.exe caller=0x... caller_rva=0x...
+
+`caller_rva`는 게임 실행 파일 기준의 호출 위치를 좁히는 데 사용합니다. 게임의 일본어 텍스트가 표시되는 화면에서 로그를 수집하면 동적 API 획득 경로와 실제 문자 출력 경로를 함께 비교할 수 있습니다.
